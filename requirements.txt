@@ -1,0 +1,7 @@
+# Core dependencies
+networkx>=3.0
+numpy>=1.24
+matplotlib>=3.7
+
+# Optional: for running notebooks or visual demos
+jupyter
