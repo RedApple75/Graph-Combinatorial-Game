@@ -1,5 +1,5 @@
 """
-helper functions for the node-kayles game
+helper functions for the nodepocalypse game
 simple, short names and minimal comments
 """
 

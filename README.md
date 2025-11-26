@@ -1,4 +1,4 @@
-# Graph Game (Node Kayles)
+# Nodepocalypse
 
 This program lets two players play a simple strategy game on a graph. On each turn, a player picks a node, and that node plus all its neighbors get removed. The game ends when no nodes remain, and the player who made the last move wins. Even though the rules are short, the game can get interesting on larger graphs.
 

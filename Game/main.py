@@ -1,5 +1,5 @@
 """
-simple main for node-kayles
+simple main for nodepocalypse
 short names, crude style, minimal comments
 """
 
@@ -14,7 +14,7 @@ from game_helpers import (
 )
 
 def menu():
-    print("NODE KAYLES")
+    print("NODEPOCALYPSE")
     print("1. play random graph")
     print("2. play sample graph")
     print("3. analyze graph (enter edges)")
