@@ -14,8 +14,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 import itertools
+import math
 from matplotlib.patches import Patch
-
 
 # =============================================================================
 # GRAPH GENERATION FUNCTIONS
@@ -23,33 +23,49 @@ from matplotlib.patches import Patch
 
 def generate_random_graph(min_nodes=5, max_nodes=15, max_degree=3):
     """
-    Generate a random graph with degree constraints.
-    
+    Generate a random graph with degree constraints, preferring edges between nearby nodes.
+
     Args:
-        min_nodes: Minimum number of nodes
-        max_nodes: Maximum number of nodes  
+        min_nodes: Minimum number of nodes (or exact when min_nodes == max_nodes)
+        max_nodes: Maximum number of nodes
         max_degree: Maximum degree per node
-    
+
     Returns:
-        NetworkX Graph
+        NetworkX Graph with node attribute 'pos' storing initial 2D coordinates.
     """
-    num_nodes = random.randint(min_nodes, max_nodes)
+    # Allow either (min,max) or exact number (when min_nodes == max_nodes)
+    num_nodes = random.randint(min_nodes, max_nodes) if min_nodes != max_nodes else min_nodes
     G = nx.Graph()
     G.add_nodes_from(range(num_nodes))
-    
-    possible_edges = list(itertools.combinations(range(num_nodes), 2))
-    random.shuffle(possible_edges)
-    
+
+    # Place nodes randomly in unit square and record positions
+    pos = {i: (random.random(), random.random()) for i in range(num_nodes)}
+    nx.set_node_attributes(G, pos, "pos")
+
+    # Build list of all possible edges with Euclidean distances
+    possible_edges = []
+    for u, v in itertools.combinations(range(num_nodes), 2):
+        ux, uy = pos[u]
+        vx, vy = pos[v]
+        dist = math.hypot(ux - vx, uy - vy)
+        possible_edges.append((dist, u, v))
+
+    # Sort edges by distance (nearest first) so local edges are added preferentially
+    possible_edges.sort(key=lambda x: x[0])
+
     degrees = {i: 0 for i in range(num_nodes)}
-    
-    for u, v in possible_edges:
+
+    for dist, u, v in possible_edges:
+        # Add edge only if both endpoints haven't reached max_degree
         if degrees[u] < max_degree and degrees[v] < max_degree:
             G.add_edge(u, v)
             degrees[u] += 1
             degrees[v] += 1
+
+        # If all nodes reached max_degree, break early
         if all(d >= max_degree for d in degrees.values()):
             break
-    
+
     return G
 
 
@@ -71,7 +87,7 @@ def create_disconnected_graph():
     G.add_edges_from([
         (0, 1), (1, 2), (2, 0),  # Triangle
         (3, 4), (4, 5),          # Path
-        (6, 7)                    # Edge
+        (6, 7)                   # Edge
     ])
     return G
 
@@ -79,56 +95,158 @@ def create_disconnected_graph():
 # =============================================================================
 # GRAPH VISUALIZATION FUNCTIONS
 # =============================================================================
+def _spaced_layout(G):
+    """
+    Compute a well-spaced layout for any graph.
+    Much stronger repulsion + deterministic initialization.
+    """
+    n = len(G)
+
+    # Deterministic initial positions placed on a grid
+    cols = int(math.ceil(math.sqrt(n)))
+    init_pos = {}
+    for i, node in enumerate(G.nodes()):
+        init_pos[node] = (i % cols, i // cols)  # grid coordinates
+
+    # High-quality spaced force layout
+    pos = nx.spring_layout(
+        G,
+        pos=init_pos,       # grid-based initialization (prevents initial clumping)
+        seed=42,
+        k=2.5,              # strong repulsion = lots of spacing
+        iterations=1000,    # long relaxation = clean structure
+        scale=5.0           # increase total spread
+    )
+    return pos
+
+from matplotlib.patches import Patch, FancyArrowPatch
+
+def _spaced_layout(G, scale=5.0, k_override=None, iterations=1000):
+    """
+    Compute a well-spaced layout for any graph.
+    - deterministic grid initialization to avoid random clumping
+    - strong spring layout with lots of iterations
+    """
+    n = len(G)
+    if n == 0:
+        return {}
+
+    # Grid-based deterministic initialization
+    cols = int(math.ceil(math.sqrt(n)))
+    init_pos = {}
+    for i, node in enumerate(G.nodes()):
+        init_pos[node] = (i % cols, i // cols)
+
+    # Heuristic k: prefer user override, else scale / sqrt(n)
+    if k_override is None:
+        k = max(0.5, scale / math.sqrt(max(1, n)))
+    else:
+        k = k_override
+
+    pos = nx.spring_layout(
+        G,
+        pos=init_pos,
+        seed=42,
+        k=k,
+        iterations=iterations,
+        scale=scale
+    )
+    return pos
+
+
+def _draw_curved_edges(G, pos, ax, rad_base=0.12, rad_variation=0.08, linewidth=1.6, color='gray'):
+    """
+    Draw edges as curved arcs to reduce overlaps.
+    - rad_base: base curvature magnitude
+    - rad_variation: extra deterministic jitter applied per edge
+    """
+    # Draw edges as FancyArrowPatch arcs (no arrowheads)
+    for i, (u, v) in enumerate(G.edges()):
+        x1, y1 = pos[u]
+        x2, y2 = pos[v]
+
+        # deterministic pseudo-random small offset for curvature to avoid exact overlaps
+        # Use hash of (u,v) to vary curvature per edge but remain stable across runs
+        h = abs(hash((u, v)))  # deterministic across runs in same Python session
+        jitter = (h % 5) * rad_variation  # small discrete jitter steps
+        # sign depends on ordering so that paired edges produce opposite arcs
+        sign = 1 if (str(u) < str(v)) else -1
+        rad = sign * (rad_base + jitter)
+
+        # If nodes are far apart, reduce curvature so edges don't loop too wide
+        euclid_dist = math.hypot(x2 - x1, y2 - y1)
+        # scale down rad for long edges
+        if euclid_dist > 2.0:
+            rad = rad * 0.35
+
+        arc = FancyArrowPatch(
+            posA=(x1, y1),
+            posB=(x2, y2),
+            connectionstyle=f"arc3,rad={rad}",
+            arrowstyle='-',      # no arrow head
+            linewidth=linewidth,
+            color=color,
+            mutation_scale=10
+        )
+        ax.add_patch(arc)
+
 
 def draw_graph(G, title="Current Graph State"):
     """
-    Visualize the graph with labeled nodes.
-    
-    Args:
-        G: NetworkX graph
-        title: Title for the plot
+    Visualize the graph with labeled nodes and curved edges (edges behind nodes).
     """
-    plt.figure(figsize=(8, 6))
-    nx.draw(G, with_labels=True, node_color='lightblue', 
-            node_size=800, font_weight='bold', font_size=12)
-    plt.title(title, fontsize=14, fontweight='bold')
+    plt.figure(figsize=(10, 8))
+    ax = plt.gca()
+    ax.clear()
+
+    pos = _spaced_layout(G)
+
+    # Draw edges as curved arcs first (so nodes/labels are on top)
+    _draw_curved_edges(G, pos, ax, rad_base=0.12, rad_variation=0.07, linewidth=1.6, color='#444444')
+
+    # Draw nodes and labels on top
+    nx.draw_networkx_nodes(G, pos, ax=ax, node_color='skyblue', node_size=900, edgecolors='black')
+    nx.draw_networkx_labels(G, pos, ax=ax, font_weight='bold', font_size=12)
+
+    # Title and formatting
+    ax.set_title(title, fontsize=16, fontweight='bold')
+    ax.set_axis_off()
     plt.tight_layout()
     plt.show()
 
 
 def draw_graph_with_position(G, title="Graph", analyzer_class=None):
     """
-    Draw graph with N/P position indicator in the corner.
-    
-    Args:
-        G: NetworkX graph
-        title: Title for the plot
-        analyzer_class: SpragueGrundyAnalyzer class (passed to avoid circular import)
-    
-    Returns:
-        Grundy number if graph has nodes, else None
+    Draw graph with N/P position indicator in the corner, using curved edges to avoid overlaps.
+    Returns Grundy number if analyzer_class provided.
     """
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.clear()
+
     if len(G.nodes()) == 0:
-        ax.text(0.5, 0.5, "Empty Graph", ha='center', va='center', 
+        ax.text(0.5, 0.5, "Empty Graph", ha='center', va='center',
                 fontsize=20, transform=ax.transAxes)
-        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_title(title, fontsize=16, fontweight='bold')
         plt.show()
         return None
-    
-    # Draw the graph
-    pos = nx.spring_layout(G, seed=42)
-    nx.draw(G, pos, ax=ax, with_labels=True, node_color='lightblue', 
-            node_size=800, font_weight='bold', font_size=12)
-    
-    ax.set_title(title, fontsize=14, fontweight='bold')
-    
-    # Add N/P position indicator
+
+    pos = _spaced_layout(G)
+
+    # Draw curved edges behind nodes
+    _draw_curved_edges(G, pos, ax, rad_base=0.12, rad_variation=0.07, linewidth=1.6, color='#666666')
+
+    # Draw nodes and labels on top
+    nx.draw_networkx_nodes(G, pos, ax=ax, node_color='skyblue', node_size=900, edgecolors='black')
+    nx.draw_networkx_labels(G, pos, ax=ax, font_weight='bold', font_size=12)
+
+    ax.set_title(title, fontsize=16, fontweight='bold')
+    ax.set_axis_off()
+
+    # N/P indicator (same behavior as before)
     if analyzer_class is not None:
         analyzer = analyzer_class(G)
         grundy = analyzer.grundy()
-        
+
         if grundy > 0:
             pos_text = f"N-position\n(G={grundy})"
             box_color = '#27AE60'  # Green
@@ -137,25 +255,25 @@ def draw_graph_with_position(G, title="Graph", analyzer_class=None):
             pos_text = "P-position\n(G=0)"
             box_color = '#E74C3C'  # Red
             status = "Player to move will LOSE"
-        
-        # Add position box in top-right corner
-        props = dict(boxstyle='round,pad=0.5', facecolor=box_color, alpha=0.9)
+
+        props = dict(boxstyle='round,pad=0.5', facecolor=box_color, alpha=0.95)
         ax.text(0.98, 0.98, pos_text, transform=ax.transAxes, fontsize=14,
                 verticalalignment='top', horizontalalignment='right',
                 bbox=props, color='white', fontweight='bold')
-        
-        # Add status text below the graph
-        ax.text(0.5, -0.05, status, transform=ax.transAxes, fontsize=12,
-                ha='center', fontweight='bold', 
+
+        ax.text(0.5, -0.05, status, transform=ax.transAxes, fontsize=13,
+                ha='center', fontweight='bold',
                 color='green' if grundy > 0 else 'red')
-        
+
         plt.tight_layout()
         plt.show()
         return grundy
-    
+
     plt.tight_layout()
     plt.show()
     return None
+
+
 
 
 # =============================================================================
@@ -165,11 +283,11 @@ def draw_graph_with_position(G, title="Graph", analyzer_class=None):
 def remove_node(G, node):
     """
     Remove a single node from the graph (helper function).
-    
+
     Args:
         G: NetworkX graph
         node: Node to remove
-    
+
     Returns:
         True if successful, False otherwise
     """
@@ -182,12 +300,12 @@ def remove_node(G, node):
 def remove_node_and_neighbors(G, node, verbose=True):
     """
     Remove a node and all its adjacent neighbors from the graph.
-    
+
     Args:
         G: NetworkX graph
         node: Node to remove
         verbose: If True, print removal info
-    
+
     Returns:
         True if successful, False otherwise
     """
@@ -195,19 +313,19 @@ def remove_node_and_neighbors(G, node, verbose=True):
         if verbose:
             print(f"Node '{node}' not found in the graph.")
         return False
-    
+
     neighbors = list(G.neighbors(node))
     G.remove_node(node)
-    
+
     if verbose:
         print(f"Removed node: {node}")
-    
+
     for neighbor in neighbors:
         if neighbor in G.nodes:
             G.remove_node(neighbor)
             if verbose:
                 print(f"  → Also removed neighbor: {neighbor}")
-    
+
     return True
 
 
@@ -218,10 +336,10 @@ def remove_node_and_neighbors(G, node, verbose=True):
 def mex(s):
     """
     Minimum excludant: smallest non-negative integer not in set s.
-    
+
     Args:
         s: Set of integers
-    
+
     Returns:
         Smallest non-negative integer not in s
     """
@@ -234,15 +352,15 @@ def mex(s):
 class SpragueGrundyAnalyzer:
     """
     Analyze graph game positions using Sprague-Grundy theorem.
-    
+
     This class computes Grundy numbers (nimbers) for Node Kayles game positions,
     determining whether positions are N-positions (winning) or P-positions (losing).
     """
-    
+
     def __init__(self, G):
         """
         Initialize analyzer with a graph.
-        
+
         Args:
             G: NetworkX graph to analyze
         """
@@ -250,7 +368,7 @@ class SpragueGrundyAnalyzer:
         self.nodes = tuple(sorted(G.nodes()))
         self.edges = set(G.edges())
         self.memo = {}  # Memoization for dynamic programming
-        
+
     def _get_neighbors(self, node, remaining_nodes):
         """Get neighbors of a node within remaining nodes."""
         neighbors = []
@@ -258,87 +376,87 @@ class SpragueGrundyAnalyzer:
             if n != node and ((node, n) in self.edges or (n, node) in self.edges):
                 neighbors.append(n)
         return neighbors
-    
+
     def _get_next_states(self, state):
         """Get all possible next states from current state."""
         next_states = []
         remaining = set(state)
-        
+
         for node in state:
             neighbors = set(self._get_neighbors(node, remaining))
             new_state = remaining - {node} - neighbors
             next_states.append(frozenset(new_state))
-        
+
         return next_states
-    
+
     def grundy(self, state=None):
         """
         Compute Grundy number for a game state using dynamic programming.
-        
+
         Args:
             state: frozenset of remaining nodes (None = full graph)
-        
+
         Returns:
             Grundy number (0 = P-position, >0 = N-position)
         """
         if state is None:
             state = frozenset(self.nodes)
-        
+
         if len(state) == 0:
             return 0
-        
+
         if state in self.memo:
             return self.memo[state]
-        
+
         next_grundy_values = set()
         for next_state in self._get_next_states(state):
             next_grundy_values.add(self.grundy(next_state))
-        
+
         g = mex(next_grundy_values)
         self.memo[state] = g
         return g
-    
+
     def is_N_position(self, state=None):
         """Check if position is N-position (winning for player to move)."""
         return self.grundy(state) > 0
-    
+
     def is_P_position(self, state=None):
         """Check if position is P-position (losing for player to move)."""
         return self.grundy(state) == 0
-    
+
     def get_position_type(self, state=None):
         """Get position type as string."""
         g = self.grundy(state)
         if g > 0:
             return f"N-position (Grundy={g})"
         return "P-position (Grundy=0)"
-    
+
     def get_winning_moves(self, state=None):
         """
         Find all winning moves from current position.
-        
+
         Args:
             state: frozenset of remaining nodes (None = full graph)
-        
+
         Returns:
             List of nodes that are winning moves
         """
         if state is None:
             state = frozenset(self.nodes)
-        
+
         if self.is_P_position(state):
             return []
-        
+
         winning_moves = []
         remaining = set(state)
-        
+
         for node in state:
             neighbors = set(self._get_neighbors(node, remaining))
             new_state = remaining - {node} - neighbors
-            
+
             if self.grundy(frozenset(new_state)) == 0:
                 winning_moves.append(node)
-        
+
         return winning_moves
 
 
@@ -349,22 +467,22 @@ class SpragueGrundyAnalyzer:
 def analyze_with_xor(G, verbose=True):
     """
     Analyze graph using XOR of independent components.
-    
+
     For disconnected graphs: G(total) = G(comp1) ⊕ G(comp2) ⊕ ...
-    
+
     Args:
         G: NetworkX graph
         verbose: If True, print analysis details
-    
+
     Returns:
         Total Grundy number
     """
     components = list(nx.connected_components(G))
-    
+
     if verbose:
         print(f"Graph has {len(components)} connected component(s)")
         print("-" * 40)
-    
+
     component_grundy = []
     for i, comp_nodes in enumerate(components):
         subgraph = G.subgraph(comp_nodes).copy()
@@ -373,20 +491,20 @@ def analyze_with_xor(G, verbose=True):
         component_grundy.append(g)
         if verbose:
             print(f"Component {i+1}: nodes={list(comp_nodes)}, Grundy={g}")
-    
+
     total_grundy = 0
     for g in component_grundy:
         total_grundy ^= g
-    
+
     if verbose:
         print("-" * 40)
         print(f"Total Grundy (XOR): {' ⊕ '.join(map(str, component_grundy))} = {total_grundy}")
-        
+
         if total_grundy > 0:
             print("Result: N-position (Player 1 can WIN)")
         else:
             print("Result: P-position (Player 1 will LOSE)")
-    
+
     return total_grundy
 
 
@@ -397,10 +515,10 @@ def analyze_with_xor(G, verbose=True):
 def get_path_grundy(max_size=12):
     """
     Compute Grundy numbers for path graphs of size 0 to max_size.
-    
+
     Args:
         max_size: Maximum path size to compute
-    
+
     Returns:
         Dictionary mapping path size to Grundy number
     """
@@ -415,47 +533,47 @@ def get_path_grundy(max_size=12):
 def create_np_grid(max_size=12):
     """
     Create N/P position grid for two-path component games.
-    
+
     Args:
         max_size: Maximum path size
-    
+
     Returns:
         Tuple of (grid array, path_grundy dictionary)
     """
     path_grundy = get_path_grundy(max_size)
     grid = np.zeros((max_size + 1, max_size + 1))
-    
+
     for i in range(max_size + 1):
         for j in range(max_size + 1):
             total_grundy = path_grundy[i] ^ path_grundy[j]
             grid[j, i] = 1 if total_grundy > 0 else 0
-    
+
     return grid, path_grundy
 
 
 def draw_chessboard_grid(grid, title='N/P Positions: Two-Path Component Game'):
     """
     Draw chessboard-style N/P position grid.
-    
+
     Args:
         grid: 2D numpy array (0=P, 1=N)
         title: Title for the plot
     """
     fig, ax = plt.subplots(figsize=(12, 10))
-    
+
     rows, cols = grid.shape
     colors = {0: '#E74C3C', 1: '#27AE60'}  # Red=P, Green=N
-    
+
     for i in range(cols):
         for j in range(rows):
             color = colors[int(grid[j, i])]
-            rect = plt.Rectangle((i - 0.5, j - 0.5), 1, 1, 
+            rect = plt.Rectangle((i - 0.5, j - 0.5), 1, 1,
                                   facecolor=color, edgecolor='black', linewidth=1.5)
             ax.add_patch(rect)
             label = 'N' if grid[j, i] == 1 else 'P'
-            ax.text(i, j, label, ha='center', va='center', 
+            ax.text(i, j, label, ha='center', va='center',
                    fontsize=11, fontweight='bold', color='white')
-    
+
     ax.set_xlim(-0.5, cols - 0.5)
     ax.set_ylim(-0.5, rows - 0.5)
     ax.set_aspect('equal')
@@ -464,14 +582,14 @@ def draw_chessboard_grid(grid, title='N/P Positions: Two-Path Component Game'):
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xticks(range(cols))
     ax.set_yticks(range(rows))
-    
+
     # Add legend
     legend_elements = [
         Patch(facecolor='#27AE60', edgecolor='black', label='N-position (Player 1 WINS)'),
         Patch(facecolor='#E74C3C', edgecolor='black', label='P-position (Player 1 LOSES)')
     ]
     ax.legend(handles=legend_elements, loc='upper right', fontsize=11)
-    
+
     plt.tight_layout()
     plt.show()
 
@@ -479,23 +597,23 @@ def draw_chessboard_grid(grid, title='N/P Positions: Two-Path Component Game'):
 def show_np_grid(max_size=10):
     """
     Show the N/P position grid for two-path component games.
-    
+
     Args:
         max_size: Maximum path size to show
     """
-    print("Computing Grundy numbers for path graphs...")
+    print("Computing Grundy numbers for path graphs.")
     grid, path_grundy = create_np_grid(max_size)
-    
+
     print("\nGrundy numbers for individual paths:")
     print("-" * 40)
     for size in range(max_size + 1):
         g = path_grundy[size]
         pos_type = "P" if g == 0 else "N"
         print(f"  Path P_{size}: Grundy = {g} ({pos_type}-position)")
-    
-    print("\nDisplaying N/P position grid...")
+
+    print("\nDisplaying N/P position grid.")
     draw_chessboard_grid(grid, f'N/P Positions: Two-Path Component Game\n(Grid size: {max_size}x{max_size})')
-    
+
     print("""
 INTERPRETATION:
 • Each cell (m, n) = game with two disconnected paths: P_m and P_n
@@ -528,7 +646,7 @@ def print_game_rules():
 ║  • P-position (Grundy = 0): Player to move will LOSE                 ║
 ║  • Winning strategy: Always move to a P-position                     ║
 ║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
+╚══════════════════════════════════════════════════════════════╝
 """)
 
 
@@ -536,4 +654,3 @@ def clear_screen():
     """Clear the terminal screen."""
     import os
     os.system('cls' if os.name == 'nt' else 'clear')
-
