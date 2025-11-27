@@ -1,7 +1,3 @@
-"""
-simple main for nodepocalypse
-short names, crude style, minimal comments
-"""
 
 import networkx as nx
 import random

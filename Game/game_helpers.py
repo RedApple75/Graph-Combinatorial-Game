@@ -1,8 +1,3 @@
-"""
-helper functions for the nodepocalypse game
-simple, short names and minimal comments
-NOW WITH XOR OPTIMIZATION FOR DISCONNECTED COMPONENTS
-"""
 
 import networkx as nx
 import matplotlib.pyplot as plt
