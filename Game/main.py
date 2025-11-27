@@ -4,6 +4,7 @@ short names, crude style, minimal comments
 """
 
 import networkx as nx
+import random
 from game_helpers import (
     gen_graph,
     sample_graph,
@@ -15,12 +16,14 @@ from game_helpers import (
 
 def menu():
     print("NODEPOCALYPSE")
-    print("1. play random graph")
-    print("2. play sample graph")
-    print("3. analyze graph (enter edges)")
-    print("4. exit")
+    print("1. play random graph (Human vs Human)")
+    print("2. play random graph (Human vs Computer)")
+    print("3. play sample graph (Human vs Human)")
+    print("4. play sample graph (Human vs Computer)")
+    print("5. analyze graph (enter edges)")
+    print("6. exit")
 
-def play(g, name="game"):
+def play(g, name="game", vs_computer=False):
     """play loop on graph g"""
     gg = g.copy()
     print("starting", name, "nodes:", len(gg.nodes()))
@@ -35,31 +38,62 @@ def play(g, name="game"):
     draw_with_pos(gg, "initial "+name)
 
     players = ["p1", "p2"]
+    if vs_computer:
+        print("Computer will play as p2")
+
     turn = 0
     while len(gg.nodes()) > 0:
         cur = players[turn % 2]
         print("\nturn:", cur)
         print("nodes:", sorted(gg.nodes()))
+        
         s = SG(gg)
         gnow = s.grundy()
-        print("grundy now:", gnow)
+        # print("grundy now:", gnow) 
+
+        # --- Computer Logic ---
+        if vs_computer and cur == "p2":
+            print("Computer is thinking...")
+            wins = s.winning_moves()
+            
+            if len(wins) > 0:
+                # Optimal play: Pick the first winning move found
+                node = wins[0]
+                print(f"Computer chooses winning move: {node}")
+            else:
+                # Losing position: Pick a random valid move
+                node = random.choice(list(gg.nodes()))
+                print(f"Computer (in losing position) chooses: {node}")
+            
+            remove_node_and_neighbors(gg, node)
+            if len(gg.nodes()) == 0:
+                print(cur, "wins")
+                break
+            draw_with_pos(gg, "after "+str(node))
+            turn += 1
+            continue
+        # ----------------------
+
         if gnow > 0:
             print("winning moves:", s.winning_moves())
         else:
             print("no winning moves")
 
-        choice = input("enter node to remove (or q to quit): ").strip()
-        if choice.lower() == 'q':
-            print("aborted")
-            return
-        # try to parse int, else leave as string
-        try:
-            node = int(choice)
-        except:
-            node = choice
-        if node not in gg.nodes():
-            print("invalid node")
-            continue
+        while True:
+            choice = input("enter node to remove (or q to quit): ").strip()
+            if choice.lower() == 'q':
+                print("aborted")
+                return
+            # try to parse int, else leave as string
+            try:
+                node = int(choice)
+            except:
+                node = choice
+            if node not in gg.nodes():
+                print("invalid node")
+                continue
+            break
+
         remove_node_and_neighbors(gg, node)
         if len(gg.nodes()) == 0:
             print(cur, "wins")
@@ -69,7 +103,7 @@ def play(g, name="game"):
 
     print("game over")
 
-def play_rand():
+def play_rand(vs_computer=False):
     mn = input("min nodes (default 5): ").strip()
     mx = input("max nodes (default 10): ").strip()
     md = input("max degree (default 3): ").strip()
@@ -80,11 +114,13 @@ def play_rand():
     except:
         mn, mx, md = 5,10,3
     g = gen_graph(mn, mx, md)
-    play(g, "random")
+    mode = "PvC" if vs_computer else "PvP"
+    play(g, f"random {mode}", vs_computer)
 
-def play_sample():
+def play_sample(vs_computer=False):
     g = sample_graph()
-    play(g, "sample")
+    mode = "PvC" if vs_computer else "PvP"
+    play(g, f"sample {mode}", vs_computer)
 
 def analyze():
     print("build graph by entering edges like 'a b' or '1 2'. empty line to finish")
@@ -121,12 +157,16 @@ def main():
         menu()
         c = input("choice: ").strip()
         if c == "1":
-            play_rand()
+            play_rand(vs_computer=False)
         elif c == "2":
-            play_sample()
+            play_rand(vs_computer=True)
         elif c == "3":
-            analyze()
+            play_sample(vs_computer=False)
         elif c == "4":
+            play_sample(vs_computer=True)
+        elif c == "5":
+            analyze()
+        elif c == "6":
             print("bye")
             break
         else:

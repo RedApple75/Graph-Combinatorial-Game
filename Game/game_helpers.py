@@ -1,6 +1,7 @@
 """
 helper functions for the nodepocalypse game
 simple, short names and minimal comments
+NOW WITH XOR OPTIMIZATION FOR DISCONNECTED COMPONENTS
 """
 
 import networkx as nx
@@ -192,7 +193,7 @@ def remove_node_and_neighbors(g, node, verbose=True):
                 print(" also removed", n)
     return True
 
-# sprague-grundy analyzer (naive recursive + memo)
+# sprague-grundy analyzer (naive recursive + memo + XOR optimization)
 def mex(s):
     i = 0
     while i in s:
@@ -201,14 +202,18 @@ def mex(s):
 
 class SG:
     """
-    simple sprague-grundy analyzer
+    simple sprague-grundy analyzer with XOR optimization
     use SG(g).grundy() or .winning_moves()
     """
-    def __init__(self, g):
+    def __init__(self, g, use_xor=True):
         self.g = g.copy()
         self.nodes = tuple(sorted(self.g.nodes()))
         self.edges = set(self.g.edges())
         self.memo = {}
+        self.use_xor = use_xor
+        # stats for analysis
+        self.xor_hits = 0
+        self.recursive_calls = 0
 
     def _nbrs(self, node, rem):
         out = []
@@ -216,6 +221,32 @@ class SG:
             if n != node and ((node,n) in self.edges or (n,node) in self.edges):
                 out.append(n)
         return out
+
+    def _find_components(self, state):
+        """find connected components in subgraph induced by state"""
+        rem = set(state)
+        visited = set()
+        comps = []
+        
+        for node in state:
+            if node in visited:
+                continue
+            # bfs to find component
+            comp = set()
+            queue = [node]
+            while queue:
+                curr = queue.pop(0)
+                if curr in visited:
+                    continue
+                visited.add(curr)
+                comp.add(curr)
+                # add neighbors that are still in state
+                for nb in self._nbrs(curr, rem):
+                    if nb not in visited:
+                        queue.append(nb)
+            comps.append(frozenset(comp))
+        
+        return comps
 
     def _next_states(self, state):
         out = []
@@ -227,12 +258,27 @@ class SG:
         return out
 
     def grundy(self, state=None):
+        self.recursive_calls += 1
+        
         if state is None:
             state = frozenset(self.nodes)
         if len(state) == 0:
             return 0
         if state in self.memo:
             return self.memo[state]
+        
+        # XOR optimization: check for disconnected components
+        if self.use_xor:
+            comps = self._find_components(state)
+            if len(comps) > 1:
+                self.xor_hits += 1
+                xor_val = 0
+                for comp in comps:
+                    xor_val ^= self.grundy(comp)
+                self.memo[state] = xor_val
+                return xor_val
+        
+        # standard recursive logic
         vals = set()
         for ns in self._next_states(state):
             vals.add(self.grundy(ns))
